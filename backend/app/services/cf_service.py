@@ -11,6 +11,9 @@ import os
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
+import subprocess
+import tempfile
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -104,84 +107,43 @@ async def upload_static_bundle(
     bundle_path: str
 ) -> Dict:
     """
-    CF Pages Direct Upload V2 - 正确实现
-    manifest 必须以 multipart files 字段方式提交（content-type: application/json）
+    使用 wrangler CLI 部署到 CF Pages（替代 Direct Upload V2 API）
     """
-    import hashlib
-    import json as _json
+    # 解压 zip 到临时目录
+    tmp_dir = tempfile.mkdtemp(prefix="cfpages-")
+    try:
+        with zipfile.ZipFile(bundle_path, "r") as zf:
+            zf.extractall(tmp_dir)
 
-    auth_headers = {"Authorization": f"Bearer {api_token}"}
+        env = os.environ.copy()
+        env["CLOUDFLARE_API_TOKEN"] = api_token
+        env["CLOUDFLARE_ACCOUNT_ID"] = account_id
 
-    # Step 1: 解压 zip，读取所有文件
-    file_contents: Dict[str, bytes] = {}
-    with zipfile.ZipFile(bundle_path, "r") as zf:
-        for name in zf.namelist():
-            if not name.endswith("/"):
-                path = f"/{name}" if not name.startswith("/") else name
-                file_contents[path] = zf.read(name)
-
-    # Step 2: 计算 SHA256
-    file_hashes = {path: hashlib.sha256(content).hexdigest() for path, content in file_contents.items()}
-
-    # Step 3: POST manifest（multipart files 方式）
-    async with httpx.AsyncClient(timeout=60) as client:
-        manifest_resp = await client.post(
-            f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments",
-            headers=auth_headers,
-            files={"manifest": (None, _json.dumps(file_hashes), "application/json")},
-        )
-        if manifest_resp.status_code == 429:
-            raise CFRateLimitError("Rate limited during manifest")
-        manifest_data = manifest_resp.json()
-        if not manifest_data.get("success"):
-            errors = manifest_data.get("errors", [])
-            raise CFApiError(f"Manifest upload failed: {errors}", errors)
-
-        result = manifest_data.get("result", {})
-        deployment_id = result.get("id", "")
-        required_hashes = set(result.get("required_hashes") or [])
-
-        logger.info(f"Manifest OK, dep_id={deployment_id}, need {len(required_hashes)} files")
-
-        # Step 4: 上传缺失文件（如有）
-        if required_hashes:
-            hash_to_content = {
-                file_hashes[p]: c
-                for p, c in file_contents.items()
-                if file_hashes[p] in required_hashes
-            }
-            upload_files = [
-                (h, (h, content, "application/octet-stream"))
-                for h, content in hash_to_content.items()
-            ]
-            # 分批上传（每批 ≤ 100）
-            batch_size = 100
-            for i in range(0, len(upload_files), batch_size):
-                batch = upload_files[i:i+batch_size]
-                up_resp = await client.post(
-                    f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/upload-missing-files",
-                    headers=auth_headers,
-                    files=batch,
-                )
-                if up_resp.status_code == 429:
-                    raise CFRateLimitError("Rate limited during file upload")
-                logger.info(f"Uploaded batch {i//batch_size+1}: {len(batch)} files, status={up_resp.status_code}")
-
-        # Step 5: finish（忽略 405）
-        try:
-            await client.post(
-                f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/finish",
-                headers=auth_headers,
+        cmd = [
+            "npx", "--yes", "wrangler@3", "pages", "deploy", tmp_dir,
+            "--project-name", project_name,
+            "--commit-dirty=true",
+        ]
+        logger.info(f"Running wrangler deploy for {project_name}")
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: subprocess.run(
+                cmd, env=env, capture_output=True, text=True, timeout=120
             )
-        except Exception:
-            pass
+        )
+        stdout = result.stdout + result.stderr
+        logger.info(f"wrangler stdout: {stdout[:500]}")
+        if result.returncode != 0:
+            raise CFApiError(f"wrangler deploy failed: {stdout[:300]}", [])
 
-    return {
-        "deployment_id": deployment_id,
-        "url": f"https://{project_name}.pages.dev",
-        "pages_domain": f"{project_name}.pages.dev",
-        "status": "active",
-    }
+        return {
+            "deployment_id": "wrangler-deploy",
+            "url": f"https://{project_name}.pages.dev",
+            "pages_domain": f"{project_name}.pages.dev",
+            "status": "active",
+        }
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def bind_custom_domain(
