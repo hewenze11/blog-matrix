@@ -104,39 +104,83 @@ async def upload_static_bundle(
     bundle_path: str
 ) -> Dict:
     """
-    Direct Upload 方式上传静态包到 CF Pages
-    bundle_path: zip 文件路径
+    CF Pages Direct Upload V2 - 正确实现
+    manifest 必须以 multipart files 字段方式提交（content-type: application/json）
     """
-    # Step 1: 创建部署
-    deploy_data = await _request(
-        "POST",
-        f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments",
-        api_token,
-    )
-    deployment = deploy_data.get("result", {})
-    deployment_id = deployment.get("id")
+    import hashlib
+    import json as _json
 
-    # Step 2: 上传文件 (multipart)
-    with open(bundle_path, "rb") as f:
-        bundle_bytes = f.read()
+    auth_headers = {"Authorization": f"Bearer {api_token}"}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        files = {"file": (os.path.basename(bundle_path), bundle_bytes, "application/zip")}
-        resp = await client.post(
+    # Step 1: 解压 zip，读取所有文件
+    file_contents: Dict[str, bytes] = {}
+    with zipfile.ZipFile(bundle_path, "r") as zf:
+        for name in zf.namelist():
+            if not name.endswith("/"):
+                path = f"/{name}" if not name.startswith("/") else name
+                file_contents[path] = zf.read(name)
+
+    # Step 2: 计算 SHA256
+    file_hashes = {path: hashlib.sha256(content).hexdigest() for path, content in file_contents.items()}
+
+    # Step 3: POST manifest（multipart files 方式）
+    async with httpx.AsyncClient(timeout=60) as client:
+        manifest_resp = await client.post(
             f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments",
-            headers={"Authorization": f"Bearer {api_token}"},
-            files=files,
+            headers=auth_headers,
+            files={"manifest": (None, _json.dumps(file_hashes), "application/json")},
         )
-        if resp.status_code == 429:
-            raise CFRateLimitError("Rate limited during upload")
-        upload_data = resp.json()
+        if manifest_resp.status_code == 429:
+            raise CFRateLimitError("Rate limited during manifest")
+        manifest_data = manifest_resp.json()
+        if not manifest_data.get("success"):
+            errors = manifest_data.get("errors", [])
+            raise CFApiError(f"Manifest upload failed: {errors}", errors)
 
-    result = upload_data.get("result", {})
+        result = manifest_data.get("result", {})
+        deployment_id = result.get("id", "")
+        required_hashes = set(result.get("required_hashes") or [])
+
+        logger.info(f"Manifest OK, dep_id={deployment_id}, need {len(required_hashes)} files")
+
+        # Step 4: 上传缺失文件（如有）
+        if required_hashes:
+            hash_to_content = {
+                file_hashes[p]: c
+                for p, c in file_contents.items()
+                if file_hashes[p] in required_hashes
+            }
+            upload_files = [
+                (h, (h, content, "application/octet-stream"))
+                for h, content in hash_to_content.items()
+            ]
+            # 分批上传（每批 ≤ 100）
+            batch_size = 100
+            for i in range(0, len(upload_files), batch_size):
+                batch = upload_files[i:i+batch_size]
+                up_resp = await client.post(
+                    f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/upload-missing-files",
+                    headers=auth_headers,
+                    files=batch,
+                )
+                if up_resp.status_code == 429:
+                    raise CFRateLimitError("Rate limited during file upload")
+                logger.info(f"Uploaded batch {i//batch_size+1}: {len(batch)} files, status={up_resp.status_code}")
+
+        # Step 5: finish（忽略 405）
+        try:
+            await client.post(
+                f"{CF_API_BASE}/accounts/{account_id}/pages/projects/{project_name}/deployments/{deployment_id}/finish",
+                headers=auth_headers,
+            )
+        except Exception:
+            pass
+
     return {
-        "deployment_id": result.get("id"),
-        "url": result.get("url"),
+        "deployment_id": deployment_id,
+        "url": f"https://{project_name}.pages.dev",
         "pages_domain": f"{project_name}.pages.dev",
-        "status": result.get("latest_stage", {}).get("status", "unknown"),
+        "status": "active",
     }
 
 

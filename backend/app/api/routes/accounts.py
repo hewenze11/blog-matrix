@@ -112,3 +112,23 @@ async def get_account_sites(
         "account_id": account.account_id,
         "projects": projects
     }
+
+
+@router.patch("/{account_id}", summary="重命名账号")
+def rename_account(
+    account_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    _: str = Depends(get_current_user)
+):
+    from app.models.account import CFAccount
+    acct = db.query(CFAccount).filter(CFAccount.id == account_id).first()
+    if not acct:
+        from fastapi import HTTPException
+        raise HTTPException(404, "账号不存在")
+    if "name" in body:
+        acct.name = body["name"]
+        db.commit()
+        db.refresh(acct)
+    return {"id": str(acct.id), "name": acct.name, "status": acct.status}
+

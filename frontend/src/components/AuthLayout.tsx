@@ -56,8 +56,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-blue-500 rounded-lg flex items-center justify-center text-lg">🌐</div>
             <div>
-              <div className="font-bold text-sm">博客矩阵平台</div>
-              <div className="text-xs text-gray-400">Blog Matrix</div>
+              <div className="font-bold text-sm">站点矩阵引擎</div>
+              <div className="text-xs text-gray-400">SiteMatrix Engine</div>
             </div>
           </div>
         </div>

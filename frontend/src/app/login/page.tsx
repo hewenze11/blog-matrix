@@ -41,7 +41,7 @@ export default function LoginPage() {
                 d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-white">博客矩阵平台</h1>
+          <h1 className="text-3xl font-bold text-white">站点矩阵引擎</h1>
           <p className="text-blue-200 mt-2 text-sm">企业级静态博客矩阵管理系统</p>
         </div>
 
