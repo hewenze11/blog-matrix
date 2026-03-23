@@ -61,6 +61,8 @@ export const blogsApi = {
     theme: string
     content_markdown?: string
   }) => api.post('/blogs', data),
+  update: (id: string, data: { name?: string; theme?: string; content_markdown?: string }) =>
+    api.put(`/blogs/${id}`, data),
   delete: (id: string) => api.delete(`/blogs/${id}`),
   getCnameInfo: (id: string) => api.get(`/blogs/${id}/cname-info`),
   bindDomain: (id: string) => api.post(`/blogs/${id}/bind-domain`, { blog_id: id, confirmed: true }),
@@ -77,4 +79,9 @@ export const monitorApi = {
 export const tasksApi = {
   list: (limit?: number) => api.get('/tasks', { params: { limit } }),
   stats: () => api.get('/tasks/stats'),
+}
+
+export const statsApi = {
+  getBlogStats: (id: string, period = '30d') =>
+    api.get(`/stats/blogs/${id}?period=${period}`),
 }

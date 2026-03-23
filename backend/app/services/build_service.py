@@ -69,7 +69,8 @@ def _build_html_site(
     domain: str,
     theme: str,
     content_markdown: Optional[str],
-    build_id: str
+    build_id: str,
+    blog_id: str = ""
 ) -> str:
     """
     在临时目录中构建静态站点
@@ -106,7 +107,8 @@ def _build_html_site(
         content_html=content_html,
         nav_id=nav_id,
         main_id=main_id,
-        build_id=build_id
+        build_id=build_id,
+        blog_id=blog_id
     )
 
     index_path = os.path.join(work_dir, "index.html")
@@ -173,7 +175,8 @@ def build_blog(
     blog_name: str,
     domain: str,
     theme: str,
-    content_markdown: Optional[str] = None
+    content_markdown: Optional[str] = None,
+    blog_id: str = ""
 ) -> Tuple[str, str]:
     """
     构建博客静态包
@@ -182,7 +185,7 @@ def build_blog(
     build_id = uuid.uuid4().hex[:12]
     logger.info(f"开始构建博客 [{blog_name}] 主题={theme} build_id={build_id}")
 
-    zip_path = _build_html_site(blog_name, domain, theme, content_markdown, build_id)
+    zip_path = _build_html_site(blog_name, domain, theme, content_markdown, build_id, blog_id)
 
     # SEO 校验
     is_valid, missing = _seo_validate(zip_path)
@@ -264,7 +267,7 @@ def _markdown_to_html(md: str) -> str:
 
 def _render_html(blog_name, domain, theme, config, prefix, font_size_base,
                  line_height, border_radius, shadow_size, content_html,
-                 nav_id, main_id, build_id) -> str:
+                 nav_id, main_id, build_id, blog_id="") -> str:
     """渲染完整 HTML 页面"""
     primary = config["primary_color"]
     bg = config["bg_color"]
@@ -366,5 +369,26 @@ def _render_html(blog_name, domain, theme, config, prefix, font_size_base,
     <p>&copy; {datetime.now().year} {blog_name} · 由博客矩阵平台驱动</p>
   </footer>
   <!-- build:{build_id} theme:{theme} -->
+
+  <!-- SiteMatrix 访问追踪 -->
+  <script>
+  (function() {{
+    var API = 'https://boke.apimart.ai/api/v1/stats/collect';
+    var BID = '{blog_id}';
+    if (!BID) return;
+    var dev = /Mobi|Android/i.test(navigator.userAgent) ? 'mobile' : 'desktop';
+    function report(evt) {{
+      fetch(API, {{method:'POST', headers:{{'Content-Type':'application/json'}},
+        body: JSON.stringify({{blog_id: BID, event: evt, device: dev, referrer: document.referrer || ''}})
+      }}).catch(function(){{}});
+    }}
+    report('pageview');
+    document.addEventListener('click', function(e) {{
+      var a = e.target && e.target.closest ? e.target.closest('a') : null;
+      if (!a) return;
+      report((a.href||'').indexOf('apimart') >= 0 ? 'click_apimart' : 'click_other');
+    }});
+  }})();
+  </script>
 </body>
 </html>"""

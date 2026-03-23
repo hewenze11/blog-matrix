@@ -36,6 +36,7 @@ class Blog(Base):
     fail_count = Column(Integer, default=0)
     last_deployed_at = Column(DateTime(timezone=True), nullable=True)
     last_checked_at = Column(DateTime(timezone=True), nullable=True)
+    content_markdown = Column(Text, nullable=True)  # 原始 Markdown 内容
     build_log = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

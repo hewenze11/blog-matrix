@@ -296,3 +296,43 @@ async def delete_blog(
     db.delete(blog)
     db.commit()
     return {"message": "删除成功"}
+
+
+@router.put("/{blog_id}", summary="更新博客内容并重新发布")
+async def update_blog(
+    blog_id: str,
+    body: dict,
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    blog = db.query(Blog).filter(Blog.id == blog_id).first()
+    if not blog:
+        raise HTTPException(status_code=404, detail="博客不存在")
+
+    if "name" in body:
+        blog.name = body["name"]
+    if "theme" in body:
+        try:
+            blog.theme = ThemeType(body["theme"])
+        except ValueError:
+            raise HTTPException(400, f"无效主题: {body['theme']}")
+    if "content_markdown" in body:
+        blog.content_markdown = body["content_markdown"]
+
+    blog.status = BlogStatus.building
+    blog.build_log = "等待重新构建..."
+    db.commit()
+
+    from app.core.config import settings
+    task_id = await enqueue_build(
+        blog_id=blog.id,
+        blog_name=blog.name,
+        theme=blog.theme.value,
+        db_url=settings.DATABASE_URL,
+        content_markdown=body.get("content_markdown")
+    )
+    blog.build_log = f"已加入重建队列，task_id={task_id}"
+    db.commit()
+    db.refresh(blog)
+    return {"id": str(blog.id), "status": "building", "message": "重新构建已触发", "task_id": task_id}
+

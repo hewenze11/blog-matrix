@@ -49,7 +49,8 @@ async def enqueue_build(
     blog_id: str,
     blog_name: str,
     theme: str,
-    db_url: str
+    db_url: str,
+    content_markdown: str = None
 ) -> str:
     """
     将构建任务加入队列并异步执行
@@ -159,7 +160,8 @@ async def _execute_build(task_id: str, blog_id: str, db_url: str):
                 blog_name=blog.name,
                 domain=blog.custom_domain or f"{blog.slug}.pages.dev",
                 theme=blog.theme.value,
-                content_markdown=None
+                content_markdown=blog.content_markdown,
+                blog_id=blog.id
             )
         except ValueError as e:
             _update_log(db, task, f"❌ SEO校验阻断: {e}", TaskStatus.failed)
