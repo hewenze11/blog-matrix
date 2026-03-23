@@ -15,10 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 拷贝应用代码
 COPY app/ ./app/
-COPY themes/ ./themes/ 2>/dev/null || true
 
-# 创建构建临时目录
-RUN mkdir -p /tmp/blog-builds
+# 创建构建临时目录和主题目录
+RUN mkdir -p /tmp/blog-builds /app/themes
 
 EXPOSE 8000
 
