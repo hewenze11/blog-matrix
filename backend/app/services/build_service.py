@@ -1,12 +1,11 @@
 """
-静态博客构建引擎
-支持 5 套主题模板，反同质化编译，SEO 合规拦截
+Hugo 静态博客构建引擎（v2）
+使用 Hugo + 开源主题替代手写 HTML，生成真正美观的博客站点
 """
 import os
 import shutil
 import zipfile
 import uuid
-import random
 import subprocess
 import logging
 from pathlib import Path
@@ -15,160 +14,222 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# 主题基础目录 (容器内挂载路径)
-THEMES_DIR = os.getenv("THEMES_DIR", "/app/themes")
 BUILD_TMP_DIR = os.getenv("BUILD_TMP_DIR", "/tmp/blog-builds")
+THEMES_CACHE_DIR = os.getenv("HUGO_THEMES_DIR", "/app/hugo-themes")
+HUGO_BIN = "/usr/local/bin/hugo"
 
-
-THEME_CONFIGS = {
+# 主题配置映射
+THEME_MAP = {
     "minimal-white": {
-        "description": "极简白色，阅读导向",
-        "primary_color": "#1a1a1a",
-        "bg_color": "#ffffff",
-        "font": "Georgia, serif",
-        "layout": "single-column"
+        "hugo_theme": "PaperMod",
+        "git_url": "https://github.com/adityatelange/hugo-PaperMod.git",
+        "config_extra": """
+[params]
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+  ShowFullTextinRSS = true
+  homeInfoParams.Title = ""
+  homeInfoParams.Content = ""
+"""
     },
     "dark-tech": {
-        "description": "科技暗黑，代码感强",
-        "primary_color": "#00ff88",
-        "bg_color": "#0d1117",
-        "font": "'Fira Code', monospace",
-        "layout": "terminal"
+        "hugo_theme": "terminal",
+        "git_url": "https://github.com/panr/hugo-theme-terminal.git",
+        "config_extra": """
+[params]
+  showMenuItems = 2
+  fullWidthTheme = false
+  centerTheme = false
+  autoCover = true
+  showLastUpdated = false
+  [params.twitter]
+    creator = ""
+    site = ""
+"""
     },
     "magazine": {
-        "description": "杂志风格，图文混排",
-        "primary_color": "#c0392b",
-        "bg_color": "#f8f9fa",
-        "font": "'Playfair Display', serif",
-        "layout": "multi-column"
+        "hugo_theme": "newspaper",
+        "git_url": "https://github.com/ThanksForAllTheFish/newspaper.git",
+        "config_extra": """
+[params]
+  description = "Latest news and articles"
+"""
     },
     "personal": {
-        "description": "个人博客，卡片式",
-        "primary_color": "#6c5ce7",
-        "bg_color": "#f0f0f5",
-        "font": "'Inter', sans-serif",
-        "layout": "card-grid"
+        "hugo_theme": "hello-friend-ng",
+        "git_url": "https://github.com/rhazdon/hugo-theme-hello-friend-ng.git",
+        "config_extra": """
+[params]
+  dateform = "Jan 2, 2006"
+  dateformShort = "Jan 2"
+  dateformNum = "2006-01-02"
+  dateformNumTime = "2006-01-02 15:04"
+  enableGlobalLanguageMenu = false
+  fingerprintAlgorithm = "sha256"
+  subtitle = ""
+  [params.logo]
+    logoMark = ""
+    logoText = ""
+    logoHomeLink = "/"
+"""
     },
     "enterprise": {
-        "description": "企业资讯，正式SEO强化",
-        "primary_color": "#0066cc",
-        "bg_color": "#ffffff",
-        "font": "'Noto Sans SC', sans-serif",
-        "layout": "enterprise"
-    }
+        "hugo_theme": "small-business",
+        "git_url": "https://github.com/themefisher/small-business.git",
+        "config_extra": """
+[params]
+  description = "Professional business solutions"
+"""
+    },
 }
 
 
-def _generate_unique_class_prefix() -> str:
-    """生成随机 CSS 类前缀，保证 HTML 结构差异化"""
-    return f"bm{uuid.uuid4().hex[:6]}"
+def _ensure_hugo_installed() -> bool:
+    """确认 Hugo 已安装"""
+    result = subprocess.run([HUGO_BIN, "version"], capture_output=True, text=True)
+    return result.returncode == 0
 
 
-def _build_html_site(
-    blog_name: str,
-    domain: str,
-    theme: str,
-    content_markdown: Optional[str],
-    build_id: str,
-    blog_id: str = ""
-) -> str:
+def _ensure_theme_cached(theme_key: str) -> Optional[str]:
     """
-    在临时目录中构建静态站点
-    返回：zip 文件路径
+    确保主题已缓存到 THEMES_CACHE_DIR，返回缓存路径
     """
-    os.makedirs(BUILD_TMP_DIR, exist_ok=True)
-    work_dir = os.path.join(BUILD_TMP_DIR, build_id)
-    os.makedirs(work_dir, exist_ok=True)
+    theme_config = THEME_MAP.get(theme_key)
+    if not theme_config:
+        logger.error(f"未知主题: {theme_key}")
+        return None
 
-    config = THEME_CONFIGS.get(theme, THEME_CONFIGS["minimal-white"])
-    prefix = _generate_unique_class_prefix()
+    theme_dir = os.path.join(THEMES_CACHE_DIR, theme_config["hugo_theme"])
+    os.makedirs(THEMES_CACHE_DIR, exist_ok=True)
 
-    # 随机化微变量（反同质化）
-    font_size_base = random.choice([15, 16, 17])
-    line_height = random.choice(["1.6", "1.7", "1.75"])
-    border_radius = random.choice(["4px", "6px", "8px", "12px"])
-    shadow_size = random.choice(["0 2px 8px", "0 4px 16px", "0 1px 4px"])
+    if os.path.isdir(theme_dir) and os.listdir(theme_dir):
+        return theme_dir
 
-    content_html = _markdown_to_html(content_markdown or _default_content(blog_name))
-    nav_id = f"nav-{uuid.uuid4().hex[:4]}"
-    main_id = f"main-{uuid.uuid4().hex[:4]}"
-
-    # 生成 index.html
-    html = _render_html(
-        blog_name=blog_name,
-        domain=domain,
-        theme=theme,
-        config=config,
-        prefix=prefix,
-        font_size_base=font_size_base,
-        line_height=line_height,
-        border_radius=border_radius,
-        shadow_size=shadow_size,
-        content_html=content_html,
-        nav_id=nav_id,
-        main_id=main_id,
-        build_id=build_id,
-        blog_id=blog_id
+    # clone 主题
+    logger.info(f"正在下载主题 {theme_config['hugo_theme']}...")
+    result = subprocess.run(
+        ["git", "clone", "--depth=1", theme_config["git_url"], theme_dir],
+        capture_output=True, text=True, timeout=120
     )
+    if result.returncode != 0:
+        logger.error(f"主题 {theme_config['hugo_theme']} 下载失败: {result.stderr}")
+        # 清理失败的目录
+        shutil.rmtree(theme_dir, ignore_errors=True)
+        return None
 
-    index_path = os.path.join(work_dir, "index.html")
-    with open(index_path, "w", encoding="utf-8") as f:
-        f.write(html)
+    return theme_dir
 
-    # 生成 robots.txt（SEO 必须）
-    robots_content = f"""User-agent: *
-Allow: /
-Sitemap: https://{domain}/sitemap.xml
+
+def _generate_config(blog_name: str, domain: str, theme_key: str, build_id: str) -> str:
+    """生成 Hugo config.toml"""
+    theme_config = THEME_MAP.get(theme_key, THEME_MAP["minimal-white"])
+    hugo_theme = theme_config["hugo_theme"]
+    config_extra = theme_config.get("config_extra", "")
+
+    base_url = f"https://{domain}/"
+
+    return f"""baseURL = "{base_url}"
+languageCode = "zh-cn"
+defaultContentLanguage = "zh-cn"
+title = "{blog_name}"
+theme = "{hugo_theme}"
+paginate = 5
+enableRobotsTXT = true
+enableEmoji = true
+
+[outputs]
+  home = ["HTML", "RSS", "JSON"]
+
+[sitemap]
+  changefreq = "weekly"
+  priority = 0.5
+
+[params]
+  env = "production"
+  title = "{blog_name}"
+  description = "{blog_name} - 专业内容平台"
+  keywords = []
+  author = "{blog_name}"
+  images = []
+  DateFormat = "January 2, 2006"
+  defaultTheme = "auto"
+  disableThemeToggle = false
+  ShowReadingTime = true
+  ShowShareButtons = false
+  ShowPostNavLinks = true
+  ShowBreadCrumbs = true
+  ShowCodeCopyButtons = true
+
+[menu]
+  [[menu.main]]
+    identifier = "home"
+    name = "首页"
+    url = "/"
+    weight = 10
+  [[menu.main]]
+    identifier = "posts"
+    name = "文章"
+    url = "/posts/"
+    weight = 20
+
+{config_extra}
 """
-    with open(os.path.join(work_dir, "robots.txt"), "w") as f:
-        f.write(robots_content)
-
-    # 生成 sitemap.xml（SEO 必须）
-    now = datetime.utcnow().strftime("%Y-%m-%d")
-    sitemap = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>https://{domain}/</loc>
-    <lastmod>{now}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
-  </url>
-</urlset>"""
-    with open(os.path.join(work_dir, "sitemap.xml"), "w") as f:
-        f.write(sitemap)
-
-    # 生成 404.html
-    with open(os.path.join(work_dir, "404.html"), "w", encoding="utf-8") as f:
-        f.write(f"<html><head><title>404 - {blog_name}</title></head><body><h1>页面未找到</h1><a href='/'>返回首页</a></body></html>")
-
-    # 打包 zip
-    zip_path = os.path.join(BUILD_TMP_DIR, f"{build_id}.zip")
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(work_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, work_dir)
-                zf.write(file_path, arcname)
-
-    # 清理临时目录
-    shutil.rmtree(work_dir, ignore_errors=True)
-
-    return zip_path
 
 
-def _seo_validate(zip_path: str) -> Tuple[bool, list]:
-    """
-    SEO 合规校验
-    返回 (is_valid, missing_files)
-    """
-    required_files = ["robots.txt", "sitemap.xml", "index.html"]
-    missing = []
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        names = zf.namelist()
-        for req in required_files:
-            if req not in names:
-                missing.append(req)
-    return len(missing) == 0, missing
+def _generate_index_md(blog_name: str) -> str:
+    """生成首页 Markdown"""
+    return f"""---
+title: "欢迎来到 {blog_name}"
+date: {datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')}
+draft: false
+---
+
+欢迎访问 **{blog_name}**，这里汇聚了最新、最实用的内容资讯。
+"""
+
+
+def _generate_post_md(blog_name: str, content_markdown: Optional[str], build_id: str) -> str:
+    """生成文章页 Markdown（带 Hugo frontmatter）"""
+    title = f"{blog_name} - 精选内容"
+    now = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    content = content_markdown or f"""
+## 关于我们
+
+{blog_name} 致力于为您提供高质量的内容和深度解析。
+
+## 最新动态
+
+我们持续更新行业最新资讯，欢迎收藏并关注。
+
+## 联系我们
+
+如有任何问题，欢迎通过官网联系我们。
+"""
+
+    return f"""---
+title: "{title}"
+date: {now}
+draft: false
+description: "{blog_name} 最新精选内容"
+tags: []
+categories: []
+author: "{blog_name}"
+showToc: true
+TocOpen: false
+hidemeta: false
+comments: false
+searchHidden: false
+ShowReadingTime: true
+ShowBreadCrumbs: true
+ShowPostNavLinks: true
+---
+
+{content}
+"""
 
 
 def build_blog(
@@ -179,24 +240,142 @@ def build_blog(
     blog_id: str = ""
 ) -> Tuple[str, str]:
     """
-    构建博客静态包
+    用 Hugo 构建博客静态包
     返回 (zip_path, build_id)
     """
     build_id = uuid.uuid4().hex[:12]
-    logger.info(f"开始构建博客 [{blog_name}] 主题={theme} build_id={build_id}")
+    logger.info(f"Hugo 构建开始 [{blog_name}] 主题={theme} build_id={build_id}")
 
-    zip_path = _build_html_site(blog_name, domain, theme, content_markdown, build_id, blog_id)
+    # 确认 Hugo 可用
+    if not _ensure_hugo_installed():
+        raise RuntimeError(f"Hugo 未安装或不可用: {HUGO_BIN}")
 
-    # SEO 校验
-    is_valid, missing = _seo_validate(zip_path)
-    if not is_valid:
-        # 自动注入 robots.txt，但 sitemap 缺失则阻断
-        if "sitemap.xml" in missing:
-            os.remove(zip_path)
-            raise ValueError(f"SEO 拦截：缺少 sitemap.xml，构建已阻断。缺失文件: {missing}")
+    # 确保主题缓存
+    theme_cache_dir = _ensure_theme_cached(theme)
+    if not theme_cache_dir:
+        # 降级到 PaperMod（最可靠的主题）
+        logger.warning(f"主题 {theme} 加载失败，降级到 PaperMod")
+        theme = "minimal-white"
+        theme_cache_dir = _ensure_theme_cached(theme)
+        if not theme_cache_dir:
+            raise RuntimeError("主题加载失败，请检查网络连接")
 
-    logger.info(f"构建完成 [{blog_name}]: {zip_path}")
-    return zip_path, build_id
+    os.makedirs(BUILD_TMP_DIR, exist_ok=True)
+    site_dir = os.path.join(BUILD_TMP_DIR, f"site-{build_id}")
+
+    try:
+        # 1. 创建 Hugo 站点骨架
+        result = subprocess.run(
+            [HUGO_BIN, "new", "site", site_dir, "--force"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"hugo new site 失败: {result.stderr}")
+
+        # 2. 复制主题到站点
+        theme_name = THEME_MAP[theme]["hugo_theme"]
+        site_theme_dir = os.path.join(site_dir, "themes", theme_name)
+        shutil.copytree(theme_cache_dir, site_theme_dir, dirs_exist_ok=False)
+
+        # 3. 写入 config.toml
+        config_content = _generate_config(blog_name, domain, theme, build_id)
+        with open(os.path.join(site_dir, "config.toml"), "w", encoding="utf-8") as f:
+            f.write(config_content)
+
+        # 4. 创建内容文件
+        posts_dir = os.path.join(site_dir, "content", "posts")
+        os.makedirs(posts_dir, exist_ok=True)
+
+        # 首页
+        with open(os.path.join(site_dir, "content", "_index.md"), "w", encoding="utf-8") as f:
+            f.write(_generate_index_md(blog_name))
+
+        # 文章
+        post_filename = os.path.join(posts_dir, f"{build_id[:8]}.md")
+        with open(post_filename, "w", encoding="utf-8") as f:
+            f.write(_generate_post_md(blog_name, content_markdown, build_id))
+
+        # 5. 执行 Hugo 构建
+        result = subprocess.run(
+            [HUGO_BIN, "--minify", "--destination", "public"],
+            cwd=site_dir,
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "HUGO_ENV": "production"}
+        )
+        if result.returncode != 0:
+            logger.warning(f"Hugo 构建警告（可能有主题兼容问题）: {result.stderr[:500]}")
+            # 尝试不带 --minify 再构建一次
+            result2 = subprocess.run(
+                [HUGO_BIN, "--destination", "public"],
+                cwd=site_dir,
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "HUGO_ENV": "production"}
+            )
+            if result2.returncode != 0:
+                raise RuntimeError(f"Hugo 构建失败: {result2.stderr[:300]}")
+
+        public_dir = os.path.join(site_dir, "public")
+        if not os.path.exists(public_dir) or not os.listdir(public_dir):
+            raise RuntimeError("Hugo 构建未生成任何文件")
+
+        # 6. SEO 校验（Hugo 自动生成 robots.txt 和 sitemap.xml，但验证一下）
+        if not os.path.exists(os.path.join(public_dir, "sitemap.xml")):
+            logger.warning("Hugo 未生成 sitemap.xml，手动创建")
+            now_str = datetime.utcnow().strftime("%Y-%m-%d")
+            with open(os.path.join(public_dir, "sitemap.xml"), "w") as f:
+                f.write(f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://{domain}/</loc><lastmod>{now_str}</lastmod><priority>1.0</priority></url>
+</urlset>""")
+
+        if not os.path.exists(os.path.join(public_dir, "robots.txt")):
+            with open(os.path.join(public_dir, "robots.txt"), "w") as f:
+                f.write(f"User-agent: *\nAllow: /\nSitemap: https://{domain}/sitemap.xml\n")
+
+        # 7. 注入访问追踪 JS（如果 blog_id 存在，插入到 index.html）
+        if blog_id:
+            index_html = os.path.join(public_dir, "index.html")
+            if os.path.exists(index_html):
+                tracking_js = f"""
+<script>
+(function(){{
+  var API='https://boke.apimart.ai/api/v1/stats/collect';
+  var BID='{blog_id}';
+  if(!BID)return;
+  var dev=/Mobi|Android/i.test(navigator.userAgent)?'mobile':'desktop';
+  function report(evt){{fetch(API,{{method:'POST',headers:{{'Content-Type':'application/json'}},
+    body:JSON.stringify({{blog_id:BID,event:evt,device:dev,referrer:document.referrer||''}})
+  }}).catch(function(){{}});}}
+  report('pageview');
+  document.addEventListener('click',function(e){{
+    var a=e.target&&e.target.closest?e.target.closest('a'):null;
+    if(!a)return;
+    report((a.href||'').indexOf('apimart')>=0?'click_apimart':'click_other');
+  }});
+}})();
+</script>
+</body>"""
+                with open(index_html, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                html_content = html_content.replace("</body>", tracking_js)
+                with open(index_html, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+
+        # 8. 打包 zip
+        zip_path = os.path.join(BUILD_TMP_DIR, f"{build_id}.zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(public_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, public_dir)
+                    zf.write(file_path, arcname)
+
+        logger.info(f"Hugo 构建完成 [{blog_name}]: {zip_path}")
+        return zip_path, build_id
+
+    finally:
+        # 清理站点临时目录（保留 zip）
+        shutil.rmtree(site_dir, ignore_errors=True)
 
 
 def cleanup_build(zip_path: str):
@@ -206,189 +385,3 @@ def cleanup_build(zip_path: str):
             os.remove(zip_path)
     except Exception as e:
         logger.warning(f"清理构建文件失败: {e}")
-
-
-def _default_content(blog_name: str) -> str:
-    return f"""# 欢迎来到 {blog_name}
-
-这是您的博客首页，您可以在这里分享您的想法、故事和知识。
-
-## 开始创作
-
-您的内容将在这里展示。点击编辑开始您的创作之旅。
-
-## 关于我们
-
-专注于提供高质量的内容，服务每一位读者。
-"""
-
-
-def _markdown_to_html(md: str) -> str:
-    """简单 Markdown 转 HTML"""
-    import re
-    lines = md.strip().split("\n")
-    html_lines = []
-    in_p = False
-
-    for line in lines:
-        line = line.rstrip()
-        if line.startswith("### "):
-            if in_p:
-                html_lines.append("</p>")
-                in_p = False
-            html_lines.append(f"<h3>{line[4:]}</h3>")
-        elif line.startswith("## "):
-            if in_p:
-                html_lines.append("</p>")
-                in_p = False
-            html_lines.append(f"<h2>{line[3:]}</h2>")
-        elif line.startswith("# "):
-            if in_p:
-                html_lines.append("</p>")
-                in_p = False
-            html_lines.append(f"<h1>{line[2:]}</h1>")
-        elif line == "":
-            if in_p:
-                html_lines.append("</p>")
-                in_p = False
-        else:
-            # inline bold/italic
-            line = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-            line = re.sub(r"\*(.+?)\*", r"<em>\1</em>", line)
-            if not in_p:
-                html_lines.append("<p>")
-                in_p = True
-            html_lines.append(line)
-
-    if in_p:
-        html_lines.append("</p>")
-    return "\n".join(html_lines)
-
-
-def _render_html(blog_name, domain, theme, config, prefix, font_size_base,
-                 line_height, border_radius, shadow_size, content_html,
-                 nav_id, main_id, build_id, blog_id="") -> str:
-    """渲染完整 HTML 页面"""
-    primary = config["primary_color"]
-    bg = config["bg_color"]
-    font = config["font"]
-    layout = config["layout"]
-
-    # 差异化布局 CSS
-    layout_css = {
-        "single-column": f".{prefix}-container {{ max-width: 720px; margin: 0 auto; }}",
-        "terminal": f".{prefix}-container {{ max-width: 900px; margin: 0 auto; background: #161b22; padding: 2rem; border-radius: {border_radius}; }}",
-        "multi-column": f".{prefix}-container {{ max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 2fr 1fr; gap: 2rem; }}",
-        "card-grid": f".{prefix}-container {{ max-width: 1100px; margin: 0 auto; }}",
-        "enterprise": f".{prefix}-container {{ max-width: 1000px; margin: 0 auto; }}",
-    }.get(layout, f".{prefix}-container {{ max-width: 800px; margin: 0 auto; }}")
-
-    return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="robots" content="index, follow">
-  <meta name="description" content="{blog_name} - 专业内容平台">
-  <meta property="og:title" content="{blog_name}">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://{domain}/">
-  <link rel="canonical" href="https://{domain}/">
-  <link rel="sitemap" type="application/xml" href="/sitemap.xml">
-  <title>{blog_name}</title>
-  <style>
-    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    :root {{
-      --{prefix}-primary: {primary};
-      --{prefix}-bg: {bg};
-      --{prefix}-font: {font};
-      --{prefix}-radius: {border_radius};
-      --{prefix}-shadow: {shadow_size} rgba(0,0,0,0.1);
-    }}
-    body {{
-      font-family: var(--{prefix}-font);
-      background-color: var(--{prefix}-bg);
-      color: {'#e6edf3' if theme == 'dark-tech' else '#333'};
-      font-size: {font_size_base}px;
-      line-height: {line_height};
-      padding: 0;
-    }}
-    #{nav_id} {{
-      background: var(--{prefix}-primary);
-      color: #fff;
-      padding: 1rem 2rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      box-shadow: var(--{prefix}-shadow);
-    }}
-    #{nav_id} .{prefix}-logo {{
-      font-size: 1.4rem;
-      font-weight: 700;
-      text-decoration: none;
-      color: #fff;
-    }}
-    #{main_id} {{
-      padding: 2.5rem 1.5rem;
-    }}
-    {layout_css}
-    .{prefix}-content h1 {{ font-size: 2rem; margin-bottom: 1.2rem; color: var(--{prefix}-primary); }}
-    .{prefix}-content h2 {{ font-size: 1.5rem; margin: 2rem 0 0.8rem; border-bottom: 2px solid var(--{prefix}-primary); padding-bottom: 0.4rem; }}
-    .{prefix}-content h3 {{ font-size: 1.2rem; margin: 1.5rem 0 0.6rem; }}
-    .{prefix}-content p {{ margin-bottom: 1.2rem; }}
-    .{prefix}-footer {{
-      text-align: center;
-      padding: 2rem;
-      color: #999;
-      font-size: 0.85rem;
-      border-top: 1px solid #eee;
-      margin-top: 3rem;
-    }}
-    @media (max-width: 768px) {{
-      .{prefix}-container {{ padding: 0 1rem; }}
-      #{nav_id} {{ flex-direction: column; gap: 0.5rem; }}
-    }}
-  </style>
-</head>
-<body>
-  <nav id="{nav_id}">
-    <a href="/" class="{prefix}-logo">{blog_name}</a>
-    <span class="{prefix}-nav-links">
-      <a href="/" style="color:#fff;text-decoration:none;margin-left:1.5rem;">首页</a>
-      <a href="/sitemap.xml" style="color:#fff;text-decoration:none;margin-left:1.5rem;">站点地图</a>
-    </span>
-  </nav>
-  <main id="{main_id}">
-    <div class="{prefix}-container">
-      <article class="{prefix}-content">
-        {content_html}
-      </article>
-    </div>
-  </main>
-  <footer class="{prefix}-footer">
-    <p>&copy; {datetime.now().year} {blog_name} · 由博客矩阵平台驱动</p>
-  </footer>
-  <!-- build:{build_id} theme:{theme} -->
-
-  <!-- SiteMatrix 访问追踪 -->
-  <script>
-  (function() {{
-    var API = 'https://boke.apimart.ai/api/v1/stats/collect';
-    var BID = '{blog_id}';
-    if (!BID) return;
-    var dev = /Mobi|Android/i.test(navigator.userAgent) ? 'mobile' : 'desktop';
-    function report(evt) {{
-      fetch(API, {{method:'POST', headers:{{'Content-Type':'application/json'}},
-        body: JSON.stringify({{blog_id: BID, event: evt, device: dev, referrer: document.referrer || ''}})
-      }}).catch(function(){{}});
-    }}
-    report('pageview');
-    document.addEventListener('click', function(e) {{
-      var a = e.target && e.target.closest ? e.target.closest('a') : null;
-      if (!a) return;
-      report((a.href||'').indexOf('apimart') >= 0 ? 'click_apimart' : 'click_other');
-    }});
-  }})();
-  </script>
-</body>
-</html>"""
