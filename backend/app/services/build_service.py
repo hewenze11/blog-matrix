@@ -3,6 +3,7 @@ Hugo 静态博客构建引擎（v2）
 使用 Hugo + 开源主题替代手写 HTML，生成真正美观的博客站点
 """
 import os
+import random
 import shutil
 import zipfile
 import uuid
@@ -25,7 +26,7 @@ THEME_MAP = {
         "git_url": "https://github.com/adityatelange/hugo-PaperMod.git",
         "config_extra": """
 [params]
-  ShowReadingTime = true
+  ShowReadingTime = {show_reading_time}
   ShowShareButtons = false
   ShowPostNavLinks = true
   ShowBreadCrumbs = true
@@ -131,12 +132,22 @@ def _generate_config(blog_name: str, domain: str, theme_key: str, build_id: str)
 
     base_url = f"https://{domain}/"
 
+    # 随机化站点指纹，增加多样性
+    paginate = random.choice([5, 6, 7, 8, 10])
+    show_reading_time = random.choice(["true", "false"])
+    date_format = random.choice([
+        "January 2, 2006",
+        "2006-01-02",
+        "Jan 2, 2006",
+        "02 January 2006",
+    ])
+
     return f"""baseURL = "{base_url}"
 languageCode = "zh-cn"
 defaultContentLanguage = "zh-cn"
 title = "{blog_name}"
 theme = "{hugo_theme}"
-paginate = 5
+paginate = {paginate}
 enableRobotsTXT = true
 enableEmoji = true
 
@@ -154,10 +165,10 @@ enableEmoji = true
   keywords = []
   author = "{blog_name}"
   images = []
-  DateFormat = "January 2, 2006"
+  DateFormat = "{date_format}"
   defaultTheme = "auto"
   disableThemeToggle = false
-  ShowReadingTime = true
+  ShowReadingTime = {show_reading_time}
   ShowShareButtons = false
   ShowPostNavLinks = true
   ShowBreadCrumbs = true
@@ -210,6 +221,13 @@ def _generate_post_md(blog_name: str, content_markdown: Optional[str], build_id:
 如有任何问题，欢迎通过官网联系我们。
 """
 
+    # 外链策略：预留主站链接（rel="nofollow sponsored"）
+    outlink_footer = (
+        "\n\n---\n\n"
+        '*本站内容仅供参考。如需了解更多，请访问 '
+        '<a href="https://apimart.ai" rel="nofollow sponsored">官网</a>。*'
+    )
+
     return f"""---
 title: "{title}"
 date: {now}
@@ -229,6 +247,7 @@ ShowPostNavLinks: true
 ---
 
 {content}
+{outlink_footer}
 """
 
 

@@ -205,12 +205,26 @@ export default function BlogsPage() {
             <h1 className="text-2xl font-bold text-gray-900">博客管理</h1>
             <p className="text-sm text-gray-500 mt-1">管理所有博客站点，每 10 秒自动刷新</p>
           </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
-          >
-            <span>+</span> 新建博客
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href="/domains"
+              className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-2"
+            >
+              <span>🌐</span> 域名管理
+            </a>
+            <a
+              href="/registrars"
+              className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2"
+            >
+              <span>🏢</span> 注册商账号
+            </a>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2"
+            >
+              <span>+</span> 新建博客
+            </button>
+          </div>
         </div>
 
         {/* Blog list */}

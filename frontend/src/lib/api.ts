@@ -85,3 +85,21 @@ export const statsApi = {
   getBlogStats: (id: string, period = '30d') =>
     api.get(`/stats/blogs/${id}?period=${period}`),
 }
+
+// ── Registrars ────────────────────────────────────────────────
+export const registrarsApi = {
+  list: () => api.get('/registrars'),
+  create: (data: any) => api.post('/registrars', data),
+  verify: (id: string) => api.post(`/registrars/${id}/verify`),
+  delete: (id: string) => api.delete(`/registrars/${id}`),
+}
+
+// ── Domains ───────────────────────────────────────────────────
+export const domainsApi = {
+  list: (blogId?: string) => api.get('/domains', { params: blogId ? { blog_id: blogId } : {} }),
+  check: (data: any) => api.post('/domains/check', data),
+  register: (data: any) => api.post('/domains/register', data),
+  get: (id: string) => api.get(`/domains/${id}`),
+  bindBlog: (id: string, blogId: string) => api.post(`/domains/${id}/bind-blog`, { blog_id: blogId }),
+  delete: (id: string) => api.delete(`/domains/${id}`),
+}
