@@ -94,6 +94,9 @@ app.add_middleware(
 # 注册路由
 app.include_router(api_router)
 
+from app.api.routes.registrars import router as registrars_router
+app.include_router(registrars_router, prefix="/api/v1")
+
 
 @app.get("/health", tags=["系统"])
 async def health():
